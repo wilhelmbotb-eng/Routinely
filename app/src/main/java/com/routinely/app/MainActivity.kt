@@ -13,6 +13,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Insights
@@ -106,8 +107,11 @@ class MainActivity : ComponentActivity() {
 fun RoutinelyApp(context: Context) {
     var tasks by remember { mutableStateOf(RoutineStorage.loadTasks(context)) }
     val completionDays = remember { RoutineStorage.loadCompletionDays(context) }
-    var showAdd by remember { mutableStateOf(false) }
-    var newTask by remember { mutableStateOf("") }
+    var showEditor by remember { mutableStateOf(false) }
+    var editingIndex by remember { mutableIntStateOf(-1) }
+    var editorTitle by remember { mutableStateOf("") }
+    var editorTime by remember { mutableStateOf("09:00") }
+    var editorError by remember { mutableStateOf<String?>(null) }
     var selectedTab by remember { mutableIntStateOf(0) }
     val completed = tasks.count { it.done }
     val progress = if (tasks.isEmpty()) 0f else completed.toFloat() / tasks.size
@@ -138,16 +142,33 @@ fun RoutinelyApp(context: Context) {
             },
             floatingActionButton = {
                 if (selectedTab == 0) FloatingActionButton(
-                    onClick = { showAdd = true }, containerColor = Paper, contentColor = Ink
+                    onClick = {
+                        editingIndex = -1
+                        editorTitle = ""
+                        editorTime = "09:00"
+                        editorError = null
+                        showEditor = true
+                    }, containerColor = Paper, contentColor = Ink
                 ) { Icon(Icons.Default.Add, contentDescription = "Add routine") }
             }
         ) { padding ->
             when (selectedTab) {
-                0 -> TodayScreen(tasks, progress, completed, currentStreak, Modifier.padding(padding)) { index ->
-                    val changed = tasks.mapIndexed { i, task -> if (i == index) task.copy(done = !task.done) else task }
-                    tasks = changed
-                    if (changed.isNotEmpty() && changed.all { it.done }) RoutineStorage.saveCompletionDay(context, today)
-                }
+                0 -> TodayScreen(
+                    tasks, progress, completed, currentStreak, Modifier.padding(padding),
+                    onToggle = { index ->
+                        val changed = tasks.mapIndexed { i, task -> if (i == index) task.copy(done = !task.done) else task }
+                        tasks = changed
+                        if (changed.isNotEmpty() && changed.all { it.done }) RoutineStorage.saveCompletionDay(context, today)
+                    },
+                    onEdit = { index ->
+                        editingIndex = index
+                        editorTitle = tasks[index].title
+                        editorTime = tasks[index].time
+                        editorError = null
+                        showEditor = true
+                    },
+                    onDelete = { index -> tasks = tasks.filterIndexed { i, _ -> i != index } }
+                )
                 1 -> StatsScreen(tasks, currentStreak, completionDays.size, Modifier.padding(padding))
                 2 -> AssistantScreen(Modifier.padding(padding))
                 3 -> InfoScreen("Smart alarms", "Alarm scheduling, recurring profiles and bedtime automation are in the next implementation phase.", Modifier.padding(padding))
@@ -155,24 +176,30 @@ fun RoutinelyApp(context: Context) {
             }
         }
 
-        if (showAdd) AlertDialog(
-            onDismissRequest = { showAdd = false },
-            containerColor = Panel,
-            title = { Text("New routine", color = Paper) },
-            text = {
-                OutlinedTextField(value = newTask, onValueChange = { newTask = it },
-                    label = { Text("Routine name") }, singleLine = true)
-            },
-            confirmButton = {
-                TextButton(onClick = {
-                    if (newTask.isNotBlank()) {
-                        tasks = tasks + RoutineTask(newTask.trim(), "Anytime")
-                        newTask = ""
-                        showAdd = false
+        if (showEditor) RoutineEditorDialog(
+            title = if (editingIndex >= 0) "Edit routine" else "Create routine",
+            routineTitle = editorTitle,
+            time = editorTime,
+            error = editorError,
+            onTitleChange = { editorTitle = it; editorError = null },
+            onTimeChange = { editorTime = it; editorError = null },
+            onDismiss = { showEditor = false },
+            onSave = {
+                when {
+                    editorTitle.isBlank() -> editorError = "Give your routine a name."
+                    !editorTime.matches(Regex("^(?:[01]\\d|2[0-3]):[0-5]\\d$")) -> editorError = "Use 24-hour time, like 07:30."
+                    editingIndex >= 0 -> {
+                        tasks = tasks.mapIndexed { i, task ->
+                            if (i == editingIndex) task.copy(title = editorTitle.trim(), time = editorTime) else task
+                        }
+                        showEditor = false
                     }
-                }) { Text("Add routine", color = Paper) }
-            },
-            dismissButton = { TextButton(onClick = { showAdd = false }) { Text("Cancel", color = Muted) } }
+                    else -> {
+                        tasks = tasks + RoutineTask(editorTitle.trim(), editorTime)
+                        showEditor = false
+                    }
+                }
+            }
         )
     }
 }
@@ -189,16 +216,18 @@ private fun calculateStreak(days: Set<String>): Int {
 }
 
 @Composable
+@Composable
 private fun TodayScreen(
     tasks: List<RoutineTask>, progress: Float, completed: Int, streak: Int,
-    modifier: Modifier = Modifier, onToggle: (Int) -> Unit
+    modifier: Modifier = Modifier, onToggle: (Int) -> Unit,
+    onEdit: (Int) -> Unit, onDelete: (Int) -> Unit
 ) {
     LazyColumn(modifier.fillMaxSize(), contentPadding = PaddingValues(22.dp, 28.dp, 22.dp, 110.dp),
         verticalArrangement = Arrangement.spacedBy(18.dp)) {
         item {
             Text("ROUTINELY  /  YOUR DAY", color = Muted, fontSize = 10.sp, fontWeight = FontWeight.Bold, letterSpacing = 2.2.sp)
             Spacer(Modifier.height(14.dp))
-            Text("Make today\ncount.", color = Paper, fontSize = 39.sp, lineHeight = 42.sp, fontWeight = FontWeight.Bold)
+            Text("Make today\\ncount.", color = Paper, fontSize = 39.sp, lineHeight = 42.sp, fontWeight = FontWeight.Bold)
             Spacer(Modifier.height(8.dp))
             Text(LocalDate.now().format(DateTimeFormatter.ofPattern("EEEE, d MMMM")), color = Muted, fontSize = 14.sp)
         }
@@ -233,23 +262,64 @@ private fun TodayScreen(
             }
         }
         itemsIndexed(tasks) { index, task ->
-            Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(17.dp)).background(Panel)
-                .clickable { onToggle(index) }.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
-                Box(Modifier.size(27.dp).clip(CircleShape).background(if (task.done) Paper else Raised),
-                    contentAlignment = Alignment.Center) {
-                    if (task.done) Icon(Icons.Default.Check, null, tint = Ink, modifier = Modifier.size(17.dp))
-                }
-                Spacer(Modifier.width(14.dp))
-                Column(Modifier.weight(1f)) {
-                    Text(task.title, color = if (task.done) Muted else Paper, fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
-                    Spacer(Modifier.height(4.dp))
-                    Text(task.time, color = Muted, fontSize = 12.sp)
-                }
-                if (task.done) Text("DONE", color = Muted, fontSize = 9.sp, fontWeight = FontWeight.Bold)
-            }
+            RoutineTaskCard(task, onToggle = { onToggle(index) }, onEdit = { onEdit(index) }, onDelete = { onDelete(index) })
         }
         if (tasks.isEmpty()) item { Text("Nothing planned yet. Tap + to add your first routine.", color = Muted) }
     }
+}
+
+@Composable
+private fun RoutineTaskCard(task: RoutineTask, onToggle: () -> Unit, onEdit: () -> Unit, onDelete: () -> Unit) {
+    var menuOpen by remember { mutableStateOf(false) }
+    Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(17.dp)).background(Panel).padding(start = 16.dp, end = 8.dp, top = 12.dp, bottom = 12.dp),
+        verticalAlignment = Alignment.CenterVertically) {
+        Row(Modifier.weight(1f).clickable { onToggle() }.padding(vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+            Box(Modifier.size(27.dp).clip(CircleShape).background(if (task.done) Paper else Raised),
+                contentAlignment = Alignment.Center) {
+                if (task.done) Icon(Icons.Default.Check, null, tint = Ink, modifier = Modifier.size(17.dp))
+            }
+            Spacer(Modifier.width(14.dp))
+            Column(Modifier.weight(1f)) {
+                Text(task.title, color = if (task.done) Muted else Paper, fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
+                Spacer(Modifier.height(4.dp))
+                Text(task.time, color = Muted, fontSize = 12.sp)
+            }
+        }
+        Box {
+            IconButton(onClick = { menuOpen = true }) {
+                Icon(Icons.Default.MoreVert, contentDescription = "Routine options", tint = Muted)
+            }
+            DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+                DropdownMenuItem(text = { Text("Edit routine") }, onClick = { menuOpen = false; onEdit() })
+                DropdownMenuItem(text = { Text("Delete routine") }, onClick = { menuOpen = false; onDelete() })
+            }
+        }
+    }
+}
+
+@Composable
+private fun RoutineEditorDialog(
+    title: String, routineTitle: String, time: String, error: String?,
+    onTitleChange: (String) -> Unit, onTimeChange: (String) -> Unit,
+    onDismiss: () -> Unit, onSave: () -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        containerColor = Panel,
+        title = { Text(title, color = Paper) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                OutlinedTextField(value = routineTitle, onValueChange = onTitleChange,
+                    label = { Text("Routine name") }, singleLine = true)
+                OutlinedTextField(value = time, onValueChange = onTimeChange,
+                    label = { Text("Time (24-hour format)") }, placeholder = { Text("07:30") }, singleLine = true)
+                Text("Choose a time between 00:00 and 23:59.", color = Muted, fontSize = 11.sp)
+                if (error != null) Text(error, color = Color(0xFFFF8A80), fontSize = 12.sp)
+            }
+        },
+        confirmButton = { TextButton(onClick = onSave) { Text("Save", color = Paper) } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel", color = Muted) } }
+    )
 }
 
 @Composable
