@@ -49,18 +49,25 @@ private object RoutineStorage {
     private const val COMPLETION_DAYS = "completion_days"
 
     fun loadTasks(context: Context): List<RoutineTask> {
-        val raw = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getString(TASKS, null)
+        val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        val today = LocalDate.now().toString()
+        val raw = prefs.getString(TASKS, null)
             ?: return listOf(
                 RoutineTask("Wake up & make bed", "07:00"),
                 RoutineTask("Drink a glass of water", "07:05"),
                 RoutineTask("Morning workout", "07:30"),
                 RoutineTask("Read for 20 minutes", "08:00")
             )
+        val savedDate = prefs.getString("last_active_date", today)
+        if (savedDate != today) {
+            prefs.edit().putString("last_active_date", today).apply()
+        }
         return try {
             val array = JSONArray(raw)
             (0 until array.length()).map { i ->
                 val item = array.getJSONObject(i)
-                RoutineTask(item.getString("title"), item.optString("time", "Anytime"), item.optBoolean("done"))
+                val wasDone = item.optBoolean("done")
+                RoutineTask(item.getString("title"), item.optString("time", "Anytime"), wasDone && savedDate == today)
             }
         } catch (_: Exception) { emptyList() }
     }
