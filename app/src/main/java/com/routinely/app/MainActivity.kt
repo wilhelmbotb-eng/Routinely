@@ -112,6 +112,7 @@ fun RoutinelyApp(context: Context) {
     var editorTitle by remember { mutableStateOf("") }
     var editorTime by remember { mutableStateOf("09:00") }
     var editorError by remember { mutableStateOf<String?>(null) }
+    var pendingDeleteIndex by remember { mutableIntStateOf(-1) }
     var selectedTab by remember { mutableIntStateOf(0) }
     val completed = tasks.count { it.done }
     val progress = if (tasks.isEmpty()) 0f else completed.toFloat() / tasks.size
@@ -167,13 +168,29 @@ fun RoutinelyApp(context: Context) {
                         editorError = null
                         showEditor = true
                     },
-                    onDelete = { index -> tasks = tasks.filterIndexed { i, _ -> i != index } }
+                    onDelete = { index -> pendingDeleteIndex = index }
                 )
                 1 -> StatsScreen(tasks, currentStreak, completionDays.size, Modifier.padding(padding))
                 2 -> AssistantScreen(Modifier.padding(padding))
                 3 -> InfoScreen("Smart alarms", "Alarm scheduling, recurring profiles and bedtime automation are in the next implementation phase.", Modifier.padding(padding))
                 else -> InfoScreen("Your space", "Customise your Routinely experience. More appearance, sound and backup controls are coming.", Modifier.padding(padding))
             }
+        }
+
+        if (pendingDeleteIndex >= 0) {
+            AlertDialog(
+                onDismissRequest = { pendingDeleteIndex = -1 },
+                containerColor = Panel,
+                title = { Text("Delete routine?", color = Paper) },
+                text = { Text("This will remove \"${tasks.getOrNull(pendingDeleteIndex)?.title ?: "this routine"}\" from your list.", color = Muted) },
+                confirmButton = {
+                    TextButton(onClick = {
+                        tasks = tasks.filterIndexed { i, _ -> i != pendingDeleteIndex }
+                        pendingDeleteIndex = -1
+                    }) { Text("Delete", color = Color(0xFFFF8A80)) }
+                },
+                dismissButton = { TextButton(onClick = { pendingDeleteIndex = -1 }) { Text("Keep it", color = Paper) } }
+            )
         }
 
         if (showEditor) RoutineEditorDialog(
