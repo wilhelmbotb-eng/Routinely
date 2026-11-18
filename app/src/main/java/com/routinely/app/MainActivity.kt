@@ -94,6 +94,12 @@ private object RoutineStorage {
         days.add(date)
         prefs.edit().putStringSet(COMPLETION_DAYS, days).apply()
     }
+
+    fun removeCompletionDay(context: Context, date: String) {
+        val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        val days = prefs.getStringSet(COMPLETION_DAYS, emptySet())?.toMutableSet() ?: return
+        if (days.remove(date)) prefs.edit().putStringSet(COMPLETION_DAYS, days).apply()
+    }
 }
 
 class MainActivity : ComponentActivity() {
@@ -106,7 +112,7 @@ class MainActivity : ComponentActivity() {
 @Composable
 fun RoutinelyApp(context: Context) {
     var tasks by remember { mutableStateOf(RoutineStorage.loadTasks(context)) }
-    val completionDays = remember { RoutineStorage.loadCompletionDays(context) }
+    var completionDays by remember { mutableStateOf(RoutineStorage.loadCompletionDays(context)) }
     var showEditor by remember { mutableStateOf(false) }
     var editingIndex by remember { mutableIntStateOf(-1) }
     var editorTitle by remember { mutableStateOf("") }
@@ -160,6 +166,8 @@ fun RoutinelyApp(context: Context) {
                         val changed = tasks.mapIndexed { i, task -> if (i == index) task.copy(done = !task.done) else task }
                         tasks = changed
                         if (changed.isNotEmpty() && changed.all { it.done }) RoutineStorage.saveCompletionDay(context, today)
+                        else RoutineStorage.removeCompletionDay(context, today)
+                        completionDays = RoutineStorage.loadCompletionDays(context)
                     },
                     onEdit = { index ->
                         editingIndex = index
@@ -233,7 +241,6 @@ private fun calculateStreak(days: Set<String>): Int {
 }
 
 @Composable
-@Composable
 private fun TodayScreen(
     tasks: List<RoutineTask>, progress: Float, completed: Int, streak: Int,
     modifier: Modifier = Modifier, onToggle: (Int) -> Unit,
@@ -244,7 +251,7 @@ private fun TodayScreen(
         item {
             Text("ROUTINELY  /  YOUR DAY", color = Muted, fontSize = 10.sp, fontWeight = FontWeight.Bold, letterSpacing = 2.2.sp)
             Spacer(Modifier.height(14.dp))
-            Text("Make today\\ncount.", color = Paper, fontSize = 39.sp, lineHeight = 42.sp, fontWeight = FontWeight.Bold)
+            Text("Make today\ncount.", color = Paper, fontSize = 39.sp, lineHeight = 42.sp, fontWeight = FontWeight.Bold)
             Spacer(Modifier.height(8.dp))
             Text(LocalDate.now().format(DateTimeFormatter.ofPattern("EEEE, d MMMM")), color = Muted, fontSize = 14.sp)
         }
