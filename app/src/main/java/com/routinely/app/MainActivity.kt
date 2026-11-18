@@ -77,7 +77,10 @@ private object RoutineStorage {
         tasks.forEach { task ->
             array.put(JSONObject().put("title", task.title).put("time", task.time).put("done", task.done))
         }
-        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putString(TASKS, array.toString()).apply()
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
+            .putString(TASKS, array.toString())
+            .putString("last_active_date", LocalDate.now().toString())
+            .apply()
     }
 
     fun loadCompletionDays(context: Context): Set<String> =
