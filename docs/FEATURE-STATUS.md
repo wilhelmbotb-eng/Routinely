@@ -2,24 +2,26 @@
 
 | Feature | Status |
 |---|---|
-| Black-and-white premium dashboard | Implemented foundation |
-| Add routines | Implemented |
-| Edit routine names | Implemented |
-| Delete routines with confirmation | Implemented |
-| Set and edit routine times (24-hour format) | Implemented |
-| Mark routines complete | Implemented |
-| Local on-device routine persistence | Implemented |
-| Daily progress overview | Implemented |
-| Completion streak foundation | Implemented |
-| Starter achievement badges | Implemented |
-| AI assistant screen and prompt ideas | UI foundation only |
-| Real AI responses | Requires secure backend |
-| Routine categories and repeat schedules | Planned |
-| Smart alarms and notifications | Planned |
+| Black-and-white dashboard with personal greeting | Implemented |
+| Add, edit, delete (with confirmation) routines | Implemented |
+| Mark routines complete, local persistence | Implemented |
+| Streaks (current and longest), perfect-day tracking | Implemented |
+| Stats: 7-day chart, month, 30-day rate, achievements | Implemented |
+| Real daily reminders (AlarmManager) with snooze | Implemented |
+| Reschedule after reboot, update, clock/time-zone change | Implemented |
+| Notification and exact-alarm permission flows, battery guidance | Implemented |
+| Settings: name, reminders, snooze length, AI backend URL | Implemented |
+| Backup export / restore, delete all data | Implemented |
+| AI tab: offline planner (templates, not AI) | Implemented |
+| AI tab: real AI answers | Implemented in the app; requires your own backend (see docs/ai-backend) |
+| Reorder, categories, priorities, notes | Planned |
+| Weekday / custom repeat schedules | Planned |
 | Home-screen widgets | Planned |
 | Calendar integration | Planned |
 | Focus timer | Planned |
 | Cloud sync | Planned |
+| Themes | Planned |
+| Room database / MVVM refactor | Planned |
 | Signed release APK | Planned |
 
-This table describes the repository state, not a promise that every roadmap item is already available in the installed app.
+This table describes the repository state. Items marked Implemented have been compiled by CI; on-device behaviour (alarms in particular, which vary by phone maker) should be verified on a real phone.

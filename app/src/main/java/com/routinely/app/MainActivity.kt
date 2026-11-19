@@ -1,6 +1,11 @@
 package com.routinely.app
 
+import android.Manifest
 import android.content.Context
+import android.os.Build
+import android.widget.Toast
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -33,86 +38,38 @@ import androidx.compose.ui.unit.sp
 import org.json.JSONArray
 import org.json.JSONObject
 import java.time.LocalDate
+import java.time.LocalTime
 import java.time.format.DateTimeFormatter
 
-private val Ink = Color(0xFF080808)
-private val Panel = Color(0xFF151515)
-private val Raised = Color(0xFF202020)
-private val Muted = Color(0xFF999999)
-private val Paper = Color(0xFFF6F5F1)
-private val Line = Color(0xFF303030)
-
-data class RoutineTask(val title: String, val time: String, val done: Boolean = false)
-
-private object RoutineStorage {
-    private const val PREFS = "routinely_v2"
-    private const val TASKS = "tasks"
-    private const val COMPLETION_DAYS = "completion_days"
-
-    fun loadTasks(context: Context): List<RoutineTask> {
-        val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-        val today = LocalDate.now().toString()
-        val raw = prefs.getString(TASKS, null)
-            ?: return listOf(
-                RoutineTask("Wake up & make bed", "07:00"),
-                RoutineTask("Drink a glass of water", "07:05"),
-                RoutineTask("Morning workout", "07:30"),
-                RoutineTask("Read for 20 minutes", "08:00")
-            )
-        val savedDate = prefs.getString("last_active_date", today)
-        if (savedDate != today) {
-            prefs.edit().putString("last_active_date", today).apply()
-        }
-        return try {
-            val array = JSONArray(raw)
-            (0 until array.length()).map { i ->
-                val item = array.getJSONObject(i)
-                val wasDone = item.optBoolean("done")
-                RoutineTask(item.getString("title"), item.optString("time", "Anytime"), wasDone && savedDate == today)
-            }
-        } catch (_: Exception) { emptyList() }
-    }
-
-    fun saveTasks(context: Context, tasks: List<RoutineTask>) {
-        val array = JSONArray()
-        tasks.forEach { task ->
-            array.put(JSONObject().put("title", task.title).put("time", task.time).put("done", task.done))
-        }
-        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
-            .putString(TASKS, array.toString())
-            .putString("last_active_date", LocalDate.now().toString())
-            .apply()
-    }
-
-    fun loadCompletionDays(context: Context): Set<String> =
-        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-            .getStringSet(COMPLETION_DAYS, emptySet())?.toSet() ?: emptySet()
-
-    fun saveCompletionDay(context: Context, date: String) {
-        val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-        val days = prefs.getStringSet(COMPLETION_DAYS, emptySet())?.toMutableSet() ?: mutableSetOf()
-        days.add(date)
-        prefs.edit().putStringSet(COMPLETION_DAYS, days).apply()
-    }
-
-    fun removeCompletionDay(context: Context, date: String) {
-        val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-        val days = prefs.getStringSet(COMPLETION_DAYS, emptySet())?.toMutableSet() ?: return
-        if (days.remove(date)) prefs.edit().putStringSet(COMPLETION_DAYS, days).apply()
-    }
-}
+internal val Ink = Color(0xFF080808)
+internal val Panel = Color(0xFF151515)
+internal val Raised = Color(0xFF202020)
+internal val Muted = Color(0xFF999999)
+internal val Paper = Color(0xFFF6F5F1)
+internal val Line = Color(0xFF303030)
 
 class MainActivity : ComponentActivity() {
+    private val resumeTick = mutableIntStateOf(0)
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        setContent { RoutinelyApp(this) }
+        setContent { RoutinelyApp(this, resumeTick.intValue) }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        resumeTick.intValue++
     }
 }
 
 @Composable
-fun RoutinelyApp(context: Context) {
+fun RoutinelyApp(context: Context, resumeTick: Int) {
     var tasks by remember { mutableStateOf(RoutineStorage.loadTasks(context)) }
     var completionDays by remember { mutableStateOf(RoutineStorage.loadCompletionDays(context)) }
+    var history by remember { mutableStateOf(RoutineStorage.loadHistory(context)) }
+    var settings by remember { mutableStateOf(RoutineStorage.loadSettings(context)) }
+    var loadedDate by remember { mutableStateOf(LocalDate.now().toString()) }
+    var permTick by remember { mutableIntStateOf(0) }
     var showEditor by remember { mutableStateOf(false) }
     var editingIndex by remember { mutableIntStateOf(-1) }
     var editorTitle by remember { mutableStateOf("") }
@@ -123,9 +80,70 @@ fun RoutinelyApp(context: Context) {
     val completed = tasks.count { it.done }
     val progress = if (tasks.isEmpty()) 0f else completed.toFloat() / tasks.size
     val today = LocalDate.now().toString()
-    val currentStreak = calculateStreak(completionDays + if (tasks.isNotEmpty() && tasks.all { it.done }) setOf(today) else emptySet())
+    val allDone = tasks.isNotEmpty() && tasks.all { it.done }
+    val effectiveDays = if (allDone) completionDays + today else completionDays
+    val currentStreak = calculateStreak(effectiveDays)
+    val hour = LocalTime.now().hour
+    val greeting = (if (hour < 12) "Good morning" else if (hour < 18) "Good afternoon" else "Good evening") +
+        (if (settings.name.isNotBlank()) ", ${settings.name.trim()}" else "")
+    val version = remember {
+        runCatching { context.packageManager.getPackageInfo(context.packageName, 0).versionName }.getOrNull() ?: "2.0.0"
+    }
 
-    LaunchedEffect(tasks) { RoutineStorage.saveTasks(context, tasks) }
+    fun toast(message: String) = Toast.makeText(context, message, Toast.LENGTH_SHORT).show()
+    fun reloadAll() {
+        tasks = RoutineStorage.loadTasks(context)
+        completionDays = RoutineStorage.loadCompletionDays(context)
+        history = RoutineStorage.loadHistory(context)
+        settings = RoutineStorage.loadSettings(context)
+    }
+
+    val notifLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { permTick++ }
+    fun requestNotifications() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) notifLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+    }
+    val exportLauncher = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/json")) { uri ->
+        if (uri != null) {
+            val ok = runCatching {
+                context.contentResolver.openOutputStream(uri)?.use { it.write(RoutineStorage.exportJson(context).toByteArray()) } != null
+            }.getOrDefault(false)
+            toast(if (ok) "Backup saved" else "Could not save the backup")
+        }
+    }
+    val importLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri != null) {
+            val text = runCatching {
+                context.contentResolver.openInputStream(uri)?.bufferedReader()?.use { it.readText() }
+            }.getOrNull()
+            if (text != null && RoutineStorage.importJson(context, text)) {
+                reloadAll()
+                toast("Backup restored")
+            } else toast("That isn't a valid Routinely backup")
+        }
+    }
+
+    // Back from the background (possibly past midnight, or after changing a permission).
+    LaunchedEffect(resumeTick) {
+        val now = LocalDate.now().toString()
+        if (now != loadedDate) {
+            loadedDate = now
+            tasks = RoutineStorage.loadTasks(context)
+            completionDays = RoutineStorage.loadCompletionDays(context)
+        }
+        permTick++
+    }
+
+    // Persist everything and keep real alarms in step with the routine list.
+    LaunchedEffect(tasks, settings.remindersEnabled) {
+        RoutineStorage.saveTasks(context, tasks)
+        val day = LocalDate.now().toString()
+        if (tasks.isNotEmpty() && tasks.all { it.done }) RoutineStorage.saveCompletionDay(context, day)
+        else RoutineStorage.removeCompletionDay(context, day)
+        RoutineStorage.saveDayProgress(context, day, tasks.count { it.done }, tasks.size)
+        completionDays = RoutineStorage.loadCompletionDays(context)
+        history = RoutineStorage.loadHistory(context)
+        ReminderScheduler.sync(context, tasks, settings.remindersEnabled)
+    }
 
     MaterialTheme(colorScheme = darkColorScheme(
         background = Ink, surface = Panel, primary = Paper, onPrimary = Ink,
@@ -161,13 +179,9 @@ fun RoutinelyApp(context: Context) {
         ) { padding ->
             when (selectedTab) {
                 0 -> TodayScreen(
-                    tasks, progress, completed, currentStreak, Modifier.padding(padding),
+                    tasks, progress, completed, currentStreak, Modifier.padding(padding), greeting,
                     onToggle = { index ->
-                        val changed = tasks.mapIndexed { i, task -> if (i == index) task.copy(done = !task.done) else task }
-                        tasks = changed
-                        if (changed.isNotEmpty() && changed.all { it.done }) RoutineStorage.saveCompletionDay(context, today)
-                        else RoutineStorage.removeCompletionDay(context, today)
-                        completionDays = RoutineStorage.loadCompletionDays(context)
+                        tasks = tasks.mapIndexed { i, task -> if (i == index) task.copy(done = !task.done) else task }
                     },
                     onEdit = { index ->
                         editingIndex = index
@@ -178,10 +192,36 @@ fun RoutinelyApp(context: Context) {
                     },
                     onDelete = { index -> pendingDeleteIndex = index }
                 )
-                1 -> StatsScreen(tasks, currentStreak, completionDays.size, Modifier.padding(padding))
-                2 -> AssistantScreen(Modifier.padding(padding))
-                3 -> InfoScreen("Smart alarms", "Alarm scheduling, recurring profiles and bedtime automation are in the next implementation phase.", Modifier.padding(padding))
-                else -> InfoScreen("Your space", "Customise your Routinely experience. More appearance, sound and backup controls are coming.", Modifier.padding(padding))
+                1 -> StatsScreen(tasks, effectiveDays, history, Modifier.padding(padding))
+                2 -> AssistantScreen(settings, onAddRoutines = { added -> tasks = tasks + added }, modifier = Modifier.padding(padding))
+                3 -> AlarmsScreen(
+                    tasks, settings, permTick,
+                    onToggleRemind = { index ->
+                        val turningOn = !tasks[index].remind
+                        tasks = tasks.mapIndexed { i, task -> if (i == index) task.copy(remind = !task.remind) else task }
+                        if (turningOn && !ReminderScheduler.hasNotificationPermission(context)) requestNotifications()
+                    },
+                    onAllowNotifications = { requestNotifications() },
+                    modifier = Modifier.padding(padding)
+                )
+                else -> SettingsScreen(
+                    settings, version,
+                    onChange = { settings = it; RoutineStorage.saveSettings(context, it) },
+                    onTestNotification = {
+                        if (ReminderScheduler.hasNotificationPermission(context)) {
+                            ReminderScheduler.showNotification(context, "test", "Test reminder")
+                        } else requestNotifications()
+                    },
+                    onExport = { exportLauncher.launch("routinely-backup.json") },
+                    onImport = { importLauncher.launch(arrayOf("*/*")) },
+                    onDeleteAll = {
+                        ReminderScheduler.sync(context, tasks, false)
+                        RoutineStorage.clearAll(context)
+                        reloadAll()
+                        toast("All data deleted")
+                    },
+                    modifier = Modifier.padding(padding)
+                )
             }
         }
 
@@ -193,6 +233,7 @@ fun RoutinelyApp(context: Context) {
                 text = { Text("This will remove \"${tasks.getOrNull(pendingDeleteIndex)?.title ?: "this routine"}\" from your list.", color = Muted) },
                 confirmButton = {
                     TextButton(onClick = {
+                        tasks.getOrNull(pendingDeleteIndex)?.let { ReminderScheduler.cancel(context, it.id) }
                         tasks = tasks.filterIndexed { i, _ -> i != pendingDeleteIndex }
                         pendingDeleteIndex = -1
                     }) { Text("Delete", color = Color(0xFFFF8A80)) }
@@ -229,27 +270,16 @@ fun RoutinelyApp(context: Context) {
     }
 }
 
-private fun calculateStreak(days: Set<String>): Int {
-    var date = LocalDate.now()
-    if (date.toString() !in days) date = date.minusDays(1)
-    var streak = 0
-    while (date.toString() in days) {
-        streak++
-        date = date.minusDays(1)
-    }
-    return streak
-}
-
 @Composable
 private fun TodayScreen(
     tasks: List<RoutineTask>, progress: Float, completed: Int, streak: Int,
-    modifier: Modifier = Modifier, onToggle: (Int) -> Unit,
+    modifier: Modifier = Modifier, greeting: String = "", onToggle: (Int) -> Unit,
     onEdit: (Int) -> Unit, onDelete: (Int) -> Unit
 ) {
     LazyColumn(modifier.fillMaxSize(), contentPadding = PaddingValues(22.dp, 28.dp, 22.dp, 110.dp),
         verticalArrangement = Arrangement.spacedBy(18.dp)) {
         item {
-            Text("ROUTINELY  /  YOUR DAY", color = Muted, fontSize = 10.sp, fontWeight = FontWeight.Bold, letterSpacing = 2.2.sp)
+            Text(greeting.uppercase().ifBlank { "ROUTINELY  /  YOUR DAY" }, color = Muted, fontSize = 10.sp, fontWeight = FontWeight.Bold, letterSpacing = 2.2.sp)
             Spacer(Modifier.height(14.dp))
             Text("Make today\ncount.", color = Paper, fontSize = 39.sp, lineHeight = 42.sp, fontWeight = FontWeight.Bold)
             Spacer(Modifier.height(8.dp))
@@ -347,7 +377,7 @@ private fun RoutineEditorDialog(
 }
 
 @Composable
-private fun MetricCard(label: String, value: String, symbol: String, modifier: Modifier = Modifier) {
+internal fun MetricCard(label: String, value: String, symbol: String, modifier: Modifier = Modifier) {
     Column(modifier.clip(RoundedCornerShape(18.dp)).background(Panel).padding(15.dp)) {
         Text(label, color = Muted, fontSize = 9.sp, letterSpacing = 1.2.sp, fontWeight = FontWeight.Bold)
         Spacer(Modifier.height(8.dp))
@@ -356,79 +386,5 @@ private fun MetricCard(label: String, value: String, symbol: String, modifier: M
             Spacer(Modifier.weight(1f))
             Text(symbol, color = Paper, fontSize = 16.sp)
         }
-    }
-}
-
-@Composable
-private fun StatsScreen(tasks: List<RoutineTask>, streak: Int, completedDays: Int, modifier: Modifier = Modifier) {
-    Column(modifier.fillMaxSize().padding(22.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
-        Text("YOUR PROGRESS", color = Muted, fontSize = 10.sp, letterSpacing = 2.sp, fontWeight = FontWeight.Bold)
-        Text("Consistency looks good on you.", color = Paper, fontSize = 30.sp, lineHeight = 35.sp, fontWeight = FontWeight.Bold)
-        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            MetricCard("CURRENT STREAK", "$streak days", "✦", Modifier.weight(1f))
-            MetricCard("ACTIVE ROUTINES", "${tasks.size}", "↗", Modifier.weight(1f))
-        }
-        Text("ACHIEVEMENTS", color = Muted, fontSize = 10.sp, letterSpacing = 1.5.sp, fontWeight = FontWeight.Bold)
-        AchievementCard("First steps", "Complete your first full day", completedDays >= 1)
-        AchievementCard("Three-day rhythm", "Build a 3-day completion streak", streak >= 3)
-        AchievementCard("One-week focus", "Build a 7-day completion streak", streak >= 7)
-        Text("Completed days: $completedDays", color = Muted, fontSize = 12.sp)
-    }
-}
-
-@Composable
-private fun AchievementCard(title: String, description: String, unlocked: Boolean) {
-    Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).background(Panel).padding(15.dp),
-        verticalAlignment = Alignment.CenterVertically) {
-        Box(Modifier.size(42.dp).clip(CircleShape).background(if (unlocked) Paper else Raised), contentAlignment = Alignment.Center) {
-            Text(if (unlocked) "★" else "·", color = if (unlocked) Ink else Muted, fontSize = 22.sp)
-        }
-        Spacer(Modifier.width(13.dp))
-        Column(Modifier.weight(1f)) {
-            Text(title, color = Paper, fontWeight = FontWeight.SemiBold)
-            Text(description, color = Muted, fontSize = 11.sp)
-        }
-        if (unlocked) Text("UNLOCKED", color = Paper, fontSize = 9.sp, fontWeight = FontWeight.Bold)
-    }
-}
-
-@Composable
-private fun AssistantScreen(modifier: Modifier = Modifier) {
-    var prompt by remember { mutableStateOf("") }
-    Column(modifier.fillMaxSize().padding(22.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
-        Text("ROUTINELY AI", color = Muted, fontSize = 10.sp, letterSpacing = 2.sp, fontWeight = FontWeight.Bold)
-        Text("A clearer day starts here.", color = Paper, fontSize = 31.sp, lineHeight = 36.sp, fontWeight = FontWeight.Bold)
-        Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(20.dp)).background(Panel).padding(17.dp),
-            verticalAlignment = Alignment.Top) {
-            Icon(Icons.Default.AutoAwesome, contentDescription = null, tint = Paper)
-            Spacer(Modifier.width(12.dp))
-            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                Text("Your personal planning assistant", color = Paper, fontWeight = FontWeight.SemiBold)
-                Text("The AI chat interface is being prepared. Secure AI service connection and account settings are the next backend milestone. Your routines will remain available offline.", color = Muted, fontSize = 12.sp, lineHeight = 18.sp)
-            }
-        }
-        Text("WHAT YOU'LL BE ABLE TO ASK", color = Muted, fontSize = 10.sp, letterSpacing = 1.4.sp, fontWeight = FontWeight.Bold)
-        listOf("Build me a balanced morning routine", "Plan my study time for this week", "Help me organise a busy day").forEach { suggestion ->
-            Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)).background(Raised).clickable { prompt = suggestion }.padding(14.dp),
-                verticalAlignment = Alignment.CenterVertically) {
-                Text(suggestion, color = Paper, fontSize = 13.sp, modifier = Modifier.weight(1f))
-                Text("↗", color = Muted)
-            }
-        }
-        Spacer(Modifier.weight(1f))
-        OutlinedTextField(value = prompt, onValueChange = { prompt = it }, modifier = Modifier.fillMaxWidth(),
-            placeholder = { Text("Tell Routinely what you need...") }, shape = RoundedCornerShape(16.dp))
-        Text("AI replies will activate after the secure service is connected.", color = Muted, fontSize = 10.sp)
-    }
-}
-
-@Composable
-private fun InfoScreen(title: String, description: String, modifier: Modifier = Modifier) {
-    Column(modifier.fillMaxSize().padding(24.dp), verticalArrangement = Arrangement.Center) {
-        Text("ROUTINELY", color = Muted, fontSize = 10.sp, fontWeight = FontWeight.Bold, letterSpacing = 2.5.sp)
-        Spacer(Modifier.height(14.dp))
-        Text(title, color = Paper, fontSize = 31.sp, fontWeight = FontWeight.Bold)
-        Spacer(Modifier.height(10.dp))
-        Text(description, color = Muted, fontSize = 14.sp, lineHeight = 22.sp)
     }
 }
